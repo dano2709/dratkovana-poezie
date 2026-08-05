@@ -8,6 +8,9 @@ const requiredFiles = [
   "public/app-admin-extra.js",
   "public/app.js",
   "server/index.mjs",
+  "server/runtime.mjs",
+  "server/content-api.mjs",
+  "server/gallery-api.mjs",
   "server/store.mjs",
   "data/db.json",
 ];
