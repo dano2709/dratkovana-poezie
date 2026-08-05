@@ -1,0 +1,16 @@
+import fs from "node:fs/promises";
+
+const requiredFiles = [
+  "public/index.html",
+  "public/styles.css",
+  "public/app.js",
+  "server/index.mjs",
+  "server/store.mjs",
+  "data/db.json",
+];
+
+for (const file of requiredFiles) {
+  await fs.access(file);
+}
+
+console.log("Build check passed: all production files are present.");

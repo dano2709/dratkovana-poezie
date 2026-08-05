@@ -1,0 +1,17 @@
+{
+  "counters": {
+    "category": 0,
+    "galleryItem": 0,
+    "photo": 0,
+    "contactMessage": 0
+  },
+  "categories": [],
+  "galleryItems": [],
+  "photos": [],
+  "contactMessages": [],
+  "siteSettings": {
+    "bioTitle": "O autorce",
+    "bioText": "Drátkovaná poezie vzniká z radosti z detailu, materiálu a ruční práce.",
+    "bioPhotoPath": null
+  }
+}

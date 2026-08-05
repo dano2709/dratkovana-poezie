@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#f3eee5"/>
+  <g fill="none" stroke="#9a4f2d" stroke-width="11" stroke-linecap="round">
+    <path d="M110 490c75-205 245-252 355-119 78 94 12 224-103 220-98-3-151-116-93-190 46-58 139-47 165 21 22 56-31 112-84 86-40-20-34-81 7-94"/>
+    <path d="M810 460c39-137 192-196 304-112 91 69 73 212-31 259-86 39-184-15-190-109-5-75 70-132 139-102 55 24 68 94 27 136-33 34-90 24-108-20"/>
+  </g>
+  <text x="600" y="245" text-anchor="middle" font-family="Georgia, serif" font-size="78" fill="#47291f">Drátkovaná poezie</text>
+  <text x="600" y="325" text-anchor="middle" font-family="Arial, sans-serif" font-size="30" letter-spacing="7" fill="#9a4f2d">RUČNĚ TVOŘENÉ ŠPERKY</text>
+</svg>

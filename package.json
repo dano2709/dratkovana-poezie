@@ -1,0 +1,16 @@
+{
+  "name": "dratkovana-poezie",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch server/index.mjs",
+    "build": "node scripts/build.mjs",
+    "start": "node server/index.mjs",
+    "test:smoke": "node scripts/smoke-test.mjs",
+    "check": "npm run build && npm run test:smoke"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
