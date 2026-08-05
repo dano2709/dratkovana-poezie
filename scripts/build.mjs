@@ -3,6 +3,9 @@ import fs from "node:fs/promises";
 const requiredFiles = [
   "public/index.html",
   "public/styles.css",
+  "public/app-core.js",
+  "public/app-admin-main.js",
+  "public/app-admin-extra.js",
   "public/app.js",
   "server/index.mjs",
   "server/store.mjs",
