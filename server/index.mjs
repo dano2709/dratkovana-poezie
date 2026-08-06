@@ -32,6 +32,9 @@ if (!Number.isFinite(port) || port <= 0) throw new Error("PORT must be a positiv
 
 async function handleApi(req, res, pathname) {
   const method = req.method || "GET";
+  if (method === "GET" && pathname === "/api/health") {
+    return ctx.sendJson(res, 200, { ok: true });
+  }
   if (await handleContentApi(ctx, req, res, pathname, method)) return;
   if (await handleGalleryApi(ctx, req, res, pathname, method)) return;
   ctx.sendJson(res, 404, { error: "API endpoint not found" });
