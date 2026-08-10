@@ -1,6 +1,6 @@
 export async function handleGalleryApi(ctx, req, res, pathname, method) {
   const { sendJson, cleanText, parsePositiveId, readJson, requireAdmin, getSession,
-    store, hydrateItem, objectFilename, uploadDir, fs, path, removeObjectIfUnused } = ctx;
+    store, hydrateItem, objectFilename, objectExists, removeObjectIfUnused } = ctx;
 
   if (method === "GET" && pathname === "/api/categories") {
     const state = store.readStore();
@@ -124,8 +124,7 @@ export async function handleGalleryApi(ctx, req, res, pathname, method) {
     const objectPath = cleanText(body.objectPath, 500);
     const filename = objectFilename(objectPath);
     if (!itemId || !filename) { sendJson(res, 400, { error: "Invalid input" }); return true; }
-    try { await fs.access(path.join(uploadDir, filename)); }
-    catch { sendJson(res, 400, { error: "Uploaded object does not exist" }); return true; }
+    if (!(await objectExists(objectPath))) { sendJson(res, 400, { error: "Uploaded object does not exist" }); return true; }
     const created = await store.updateStore((draft) => {
       if (!draft.galleryItems.some((item) => item.id === itemId)) return null;
       const photo = {
