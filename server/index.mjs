@@ -31,6 +31,7 @@ const port = Number(process.env.PORT || 3001);
 if (!Number.isFinite(port) || port <= 0) throw new Error("PORT must be a positive number");
 
 async function handleApi(req, res, pathname) {
+  if (ctx.blobEnabled) await store.initializeStore();
   const method = req.method || "GET";
   if (method === "GET" && pathname === "/api/health") {
     return ctx.sendJson(res, 200, { ok: true });
