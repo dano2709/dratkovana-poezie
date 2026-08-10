@@ -1,16 +1,17 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
+import { del, get, head, put } from "@vercel/blob";
 
 export async function createRuntime({ rootDir, store }) {
   const uploadDir = path.resolve(process.env.UPLOAD_DIR || path.join(rootDir, "uploads"));
-  const isProduction = process.env.NODE_ENV === "production";
+  const isProduction = process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "production";
+  const blobEnabled = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
   const adminUsername = process.env.ADMIN_USERNAME || "Admin";
   const adminPassword = process.env.ADMIN_PASSWORD || "Havirov123";
   const sessionSecret = process.env.SESSION_SECRET || "development-only-change-me";
-  const maxUploadBytes = Number(process.env.MAX_UPLOAD_MB || 20) * 1024 * 1024;
-  const sessions = new Map();
-  const pendingUploads = new Map();
+  const maxUploadBytes = Number(process.env.MAX_UPLOAD_MB || (blobEnabled ? 4 : 20)) * 1024 * 1024;
   const cookieName = "dratkovana_session";
   const sessionTtl = 7 * 24 * 60 * 60 * 1000;
   const uploadTtl = 10 * 60 * 1000;
@@ -18,7 +19,7 @@ export async function createRuntime({ rootDir, store }) {
   if (isProduction && sessionSecret === "development-only-change-me") {
     console.warn("WARNING: Set SESSION_SECRET in production.");
   }
-  await fs.mkdir(uploadDir, { recursive: true });
+  if (!blobEnabled) await fs.mkdir(uploadDir, { recursive: true });
 
   const contentTypes = {
     ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -58,28 +59,42 @@ export async function createRuntime({ rootDir, store }) {
   }
 
   function parseCookies(req) {
-    const entries = (req.headers.cookie || "").split(";").map((part) => part.trim()).filter(Boolean).map((part) => {
-      const index = part.indexOf("=");
-      return index < 0
-        ? [decodeURIComponent(part), ""]
-        : [decodeURIComponent(part.slice(0, index)), decodeURIComponent(part.slice(index + 1))];
-    });
-    return Object.fromEntries(entries);
+    try {
+      const entries = (req.headers.cookie || "").split(";").map((part) => part.trim()).filter(Boolean).map((part) => {
+        const index = part.indexOf("=");
+        return index < 0
+          ? [decodeURIComponent(part), ""]
+          : [decodeURIComponent(part.slice(0, index)), decodeURIComponent(part.slice(index + 1))];
+      });
+      return Object.fromEntries(entries);
+    } catch {
+      return {};
+    }
+  }
+
+  function createSignedPayload(payload, purpose) {
+    const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    return `${encoded}.${signToken(`${purpose}:${encoded}`)}`;
+  }
+
+  function verifySignedPayload(token, purpose) {
+    if (typeof token !== "string") return null;
+    const separator = token.lastIndexOf(".");
+    if (separator < 1) return null;
+    const encoded = token.slice(0, separator);
+    const signature = token.slice(separator + 1);
+    if (!safeEqual(signature, signToken(`${purpose}:${encoded}`))) return null;
+    try {
+      return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    } catch {
+      return null;
+    }
   }
 
   function getSession(req) {
-    const signed = parseCookies(req)[cookieName];
-    if (!signed) return null;
-    const separator = signed.lastIndexOf(".");
-    if (separator < 1) return null;
-    const token = signed.slice(0, separator);
-    if (!safeEqual(signed.slice(separator + 1), signToken(token))) return null;
-    const session = sessions.get(token);
-    if (!session || session.expiresAt <= Date.now()) {
-      sessions.delete(token);
-      return null;
-    }
-    return session;
+    const payload = verifySignedPayload(parseCookies(req)[cookieName], "session");
+    if (!payload || !Number.isFinite(payload.expiresAt) || payload.expiresAt <= Date.now()) return null;
+    return payload;
   }
 
   function requireAdmin(req, res) {
@@ -93,10 +108,12 @@ export async function createRuntime({ rootDir, store }) {
       sendJson(res, 401, { error: "Nesprávné přihlašovací údaje" });
       return;
     }
-    const token = crypto.randomBytes(32).toString("hex");
-    sessions.set(token, { expiresAt: Date.now() + sessionTtl });
+    const signed = createSignedPayload({
+      expiresAt: Date.now() + sessionTtl,
+      nonce: crypto.randomBytes(16).toString("hex")
+    }, "session");
     const parts = [
-      `${cookieName}=${encodeURIComponent(`${token}.${signToken(token)}`)}`,
+      `${cookieName}=${encodeURIComponent(signed)}`,
       "HttpOnly", "SameSite=Lax", "Path=/", `Max-Age=${Math.floor(sessionTtl / 1000)}`
     ];
     if (isProduction) parts.push("Secure");
@@ -105,10 +122,18 @@ export async function createRuntime({ rootDir, store }) {
   }
 
   function logout(req, res) {
-    const token = (parseCookies(req)[cookieName] || "").split(".", 1)[0];
-    if (token) sessions.delete(token);
     res.setHeader("set-cookie", `${cookieName}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${isProduction ? "; Secure" : ""}`);
     sendJson(res, 200, { success: true });
+  }
+
+  function createUploadToken({ filename, maxSize, contentType }) {
+    return createSignedPayload({ filename, maxSize, contentType, expiresAt: Date.now() + uploadTtl }, "upload");
+  }
+
+  function verifyUploadToken(token) {
+    const payload = verifySignedPayload(token, "upload");
+    if (!payload || !payload.filename || !Number.isFinite(payload.maxSize) || payload.expiresAt <= Date.now()) return null;
+    return payload;
   }
 
   async function readBody(req, maxBytes = 1024 * 1024) {
@@ -157,13 +182,70 @@ export async function createRuntime({ rootDir, store }) {
     return filename && filename !== "." ? filename : null;
   }
 
+  async function objectExists(objectPath) {
+    const filename = objectFilename(objectPath);
+    if (!filename) return false;
+    if (blobEnabled) {
+      try {
+        await head(`objects/${filename}`);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    try {
+      await fs.access(path.join(uploadDir, filename));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function writeObject(filename, body, contentType) {
+    if (blobEnabled) {
+      await put(`objects/${filename}`, body, {
+        access: "private",
+        addRandomSuffix: false,
+        allowOverwrite: false,
+        contentType: contentType || "application/octet-stream",
+        cacheControlMaxAge: 31536000
+      });
+      return;
+    }
+    await fs.writeFile(path.join(uploadDir, filename), body);
+  }
+
   async function removeObjectIfUnused(objectPath, excludingPhotoId = null) {
     const state = store.readStore();
     const used = state.photos.some((photo) => photo.id !== excludingPhotoId && photo.objectPath === objectPath)
       || state.siteSettings.bioPhotoPath === objectPath;
     if (used) return;
     const filename = objectFilename(objectPath);
-    if (filename) await fs.rm(path.join(uploadDir, filename), { force: true });
+    if (!filename) return;
+    if (blobEnabled) {
+      try { await del(`objects/${filename}`); } catch {}
+      return;
+    }
+    await fs.rm(path.join(uploadDir, filename), { force: true });
+  }
+
+  async function serveObject(res, filename) {
+    if (blobEnabled) {
+      const result = await get(`objects/${filename}`, { access: "private" });
+      if (!result || result.statusCode !== 200 || !result.stream) {
+        const error = new Error("Object not found");
+        error.code = "ENOENT";
+        throw error;
+      }
+      res.writeHead(200, {
+        "content-type": result.blob?.contentType || "application/octet-stream",
+        "cache-control": "public, max-age=86400",
+        ...(result.blob?.etag ? { etag: result.blob.etag } : {})
+      });
+      Readable.fromWeb(result.stream).pipe(res);
+      return;
+    }
+    await serveFile(res, path.join(uploadDir, filename), "public, max-age=31536000, immutable");
   }
 
   async function serveFile(res, filePath, cacheControl = "public, max-age=300") {
@@ -174,8 +256,9 @@ export async function createRuntime({ rootDir, store }) {
   }
 
   return {
-    crypto, fs, path, store, uploadDir, maxUploadBytes, uploadTtl, pendingUploads,
+    crypto, fs, path, store, uploadDir, maxUploadBytes, uploadTtl, blobEnabled,
     sendJson, cleanText, parsePositiveId, getSession, requireAdmin, login, logout,
-    readBody, readJson, hydrateItem, objectFilename, removeObjectIfUnused, serveFile
+    createUploadToken, verifyUploadToken, readBody, readJson, hydrateItem, objectFilename,
+    objectExists, writeObject, removeObjectIfUnused, serveObject, serveFile
   };
 }
