@@ -40,7 +40,56 @@ async function saveItem(event) {
   }
 }
 
-async function uploadFile(file) {
+async function loadImageForCompression(file) {
+  if ("createImageBitmap" in window) return await createImageBitmap(file);
+  return await new Promise((resolve, reject) => {
+    const image = new Image();
+    const url = URL.createObjectURL(file);
+    image.onload = () => { URL.revokeObjectURL(url); resolve(image); };
+    image.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Obrázek se nepodařilo načíst.")); };
+    image.src = url;
+  });
+}
+
+function canvasToBlob(canvas, type, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Obrázek se nepodařilo zmenšit.")), type, quality);
+  });
+}
+
+async function prepareImageForUpload(file) {
+  const targetBytes = Math.floor(3.6 * 1024 * 1024);
+  if (file.size <= targetBytes) return file;
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    throw new Error("Tento obrázek je příliš velký. Použijte JPG, PNG nebo WebP do 4 MB.");
+  }
+
+  const image = await loadImageForCompression(file);
+  let maxSide = 2400;
+  let quality = 0.86;
+  let result = null;
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+    const context = canvas.getContext("2d", { alpha: true });
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    result = await canvasToBlob(canvas, "image/webp", quality);
+    if (result.size <= targetBytes) break;
+    maxSide = Math.round(maxSide * 0.82);
+    quality = Math.max(0.58, quality - 0.08);
+  }
+
+  if (typeof image.close === "function") image.close();
+  if (!result || result.size > targetBytes) throw new Error("Fotografii se nepodařilo zmenšit pod 4 MB.");
+  const baseName = file.name.replace(/\.[^.]+$/, "") || "fotografie";
+  return new File([result], `${baseName}.webp`, { type: "image/webp", lastModified: Date.now() });
+}
+
+async function uploadFile(originalFile) {
+  const file = await prepareImageForUpload(originalFile);
   const upload = await api("/api/storage/uploads/request-url", jsonOptions("POST", {
     name: file.name,
     size: file.size,
