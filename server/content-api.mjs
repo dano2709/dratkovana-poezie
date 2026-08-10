@@ -1,9 +1,9 @@
 export async function handleContentApi(ctx, req, res, pathname, method) {
   const { sendJson, cleanText, readJson, readBody, requireAdmin, getSession, login, logout,
-    store, parsePositiveId, removeObjectIfUnused, pendingUploads, uploadTtl, maxUploadBytes,
-    objectFilename, uploadDir, fs, path, crypto, serveFile } = ctx;
+    store, parsePositiveId, removeObjectIfUnused, maxUploadBytes, objectFilename, path, crypto,
+    createUploadToken, verifyUploadToken, writeObject, serveObject } = ctx;
 
-  if (method === "GET" && pathname === "/api/healthz") {
+  if (method === "GET" && (pathname === "/api/healthz" || pathname === "/api/health")) {
     sendJson(res, 200, { status: "ok" }); return true;
   }
   if (method === "GET" && pathname === "/api/auth/user") {
@@ -83,36 +83,37 @@ export async function handleContentApi(ctx, req, res, pathname, method) {
     const size = Number(body.size);
     const contentType = cleanText(body.contentType, 120);
     if (!name || !Number.isFinite(size) || size <= 0 || size > maxUploadBytes || !contentType.startsWith("image/")) {
-      sendJson(res, 400, { error: "Missing or invalid required fields" }); return true;
+      sendJson(res, 400, { error: `Obrázek je neplatný nebo větší než ${Math.floor(maxUploadBytes / 1024 / 1024)} MB` }); return true;
     }
     const map = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif", "image/svg+xml": ".svg" };
     const original = path.extname(name).toLowerCase().replace(/[^.a-z0-9]/g, "");
     const filename = `${crypto.randomUUID()}${original || map[contentType] || ".img"}`;
-    const token = crypto.randomBytes(24).toString("hex");
-    pendingUploads.set(token, { filename, maxSize: size, expiresAt: Date.now() + uploadTtl });
-    sendJson(res, 200, { uploadURL: `/api/storage/uploads/${token}`, objectPath: `/objects/${filename}`, metadata: { name, size, contentType } });
+    const token = createUploadToken({ filename, maxSize: size, contentType });
+    sendJson(res, 200, {
+      uploadURL: `/api/storage/uploads/${encodeURIComponent(token)}`,
+      objectPath: `/objects/${filename}`,
+      metadata: { name, size, contentType }
+    });
     return true;
   }
-  const uploadMatch = pathname.match(/^\/api\/storage\/uploads\/([a-f0-9]+)$/);
+
+  const uploadMatch = pathname.match(/^\/api\/storage\/uploads\/([A-Za-z0-9._~-]+)$/);
   if (uploadMatch && method === "PUT") {
     if (!requireAdmin(req, res)) return true;
-    const token = uploadMatch[1];
-    const pending = pendingUploads.get(token);
-    if (!pending || pending.expiresAt <= Date.now()) {
-      pendingUploads.delete(token); sendJson(res, 404, { error: "Upload URL expired or does not exist" }); return true;
-    }
+    const pending = verifyUploadToken(decodeURIComponent(uploadMatch[1]));
+    if (!pending) { sendJson(res, 404, { error: "Upload URL expired or does not exist" }); return true; }
     const body = await readBody(req, maxUploadBytes);
     if (!body.length) { sendJson(res, 400, { error: "Empty upload" }); return true; }
     if (body.length > pending.maxSize) { sendJson(res, 413, { error: "Uploaded file is larger than declared" }); return true; }
-    await fs.writeFile(path.join(uploadDir, pending.filename), body);
-    pendingUploads.delete(token);
-    sendJson(res, 200, { success: true }); return true;
+    await writeObject(pending.filename, body, pending.contentType || req.headers["content-type"]);
+    sendJson(res, 200, { success: true, objectPath: `/objects/${pending.filename}` }); return true;
   }
+
   const objectMatch = pathname.match(/^\/api\/storage\/(?:objects|public-objects)\/(.+)$/);
   if (objectMatch && method === "GET") {
     const filename = path.basename(decodeURIComponent(objectMatch[1]));
-    if (!filename) { sendJson(res, 404, { error: "Object not found" }); return true; }
-    try { await serveFile(res, path.join(uploadDir, filename), "public, max-age=31536000, immutable"); }
+    if (!filename || !objectFilename(`/objects/${filename}`)) { sendJson(res, 404, { error: "Object not found" }); return true; }
+    try { await serveObject(res, filename); }
     catch { sendJson(res, 404, { error: "Object not found" }); }
     return true;
   }
